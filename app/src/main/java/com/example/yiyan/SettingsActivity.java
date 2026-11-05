@@ -56,10 +56,13 @@ public class SettingsActivity extends ThemedActivity {
     private boolean wallpaperGranted;
     private UpdateChecker.Release latestRelease;
 
-    /** 底部 Tab 的三个面板，切换时做同方向的平滑滑动。 */
+    /** 底部 Tab 的四个面板，切换时做同方向的平滑滑动。 */
     private static final int[] PANEL_IDS = {
-            R.id.quotes_panel, R.id.theme_panel, R.id.settings_panel};
+            R.id.quotes_panel, R.id.log_panel, R.id.theme_panel, R.id.settings_panel};
     private int currentPanelIndex = 0;
+
+    private static final int LOG_PAGE_SIZE = 100;
+    private int logShownLimit = LOG_PAGE_SIZE;
 
     private final android.os.Handler refreshHandler =
             new android.os.Handler(android.os.Looper.getMainLooper());
@@ -89,6 +92,7 @@ public class SettingsActivity extends ThemedActivity {
         bindWidgetPresets();
         bindRootHomeWatch();
         bindAddQuote();
+        bindLog();
         bindCustomLayout();
         bindImport();
         bindUpdate();
@@ -243,6 +247,8 @@ public class SettingsActivity extends ThemedActivity {
         }
         refreshCustomBackgroundUi();
         syncGlassSwitch();
+        // 从「一言管理」返回时，日志里的句子和编辑结果可能已经变了
+        if (currentPanelIndex == 1) refreshLog();
         boolean granted = WallpaperSource.canRead(this);
         refreshWallpaperPermission();
         if (granted && !wallpaperGranted) {
@@ -867,17 +873,27 @@ public class SettingsActivity extends ThemedActivity {
             String work = sanitize(workField.getText().toString());
             String cat = String.valueOf(category.getSelectedItem());
 
-            Set<String> quotes = new HashSet<>(prefs.getStringSet("custom_quotes", new HashSet<String>()));
-            String line = new Quote(text, author, work, "用户添加", cat).toLine();
-            if (!quotes.add(line)) {
-                Toast.makeText(this, "这条一言已经在库里了", Toast.LENGTH_SHORT).show();
-                return;
+            Set<String> quotes = new HashSet<>(UserLog.lines(prefs));
+            // 同一句 + 同一作者 + 同一出处视为重复；不能只比较整行，因为新条目带了时间戳
+            for (String existing : quotes) {
+                Quote old = Quote.parse(existing, "用户添加", "用户");
+                if (old != null && old.text.equals(text)
+                        && old.author.equals(author) && old.work.equals(work)) {
+                    Toast.makeText(this, "这条一言已经在库里了", Toast.LENGTH_SHORT).show();
+                    return;
+                }
             }
-            prefs.edit().putStringSet("custom_quotes", quotes).apply();
+            String line = new Quote(text, author, work, "用户添加", cat, "",
+                    System.currentTimeMillis()).toLine();
+            quotes.add(line);
+            prefs.edit().putStringSet(UserLog.KEY_CUSTOM_QUOTES, quotes).apply();
 
             textField.setText("");
             authorField.setText("");
             workField.setText("");
+            // 日志页按添加时间倒序，刚加完立刻刷新，切过去就能看到日期和时间
+            logShownLimit = LOG_PAGE_SIZE;
+            refreshLog();
             sendBroadcast(new Intent(QuoteWidgetProvider.ACTION).setPackage(getPackageName()));
             Toast.makeText(this,
                     author.isEmpty() && work.isEmpty()
@@ -890,6 +906,132 @@ public class SettingsActivity extends ThemedActivity {
     /** 存储用 "|" 分字段、换行分条目，所以用户输入里的这两个字符要替换掉。 */
     private String sanitize(String raw) {
         return raw.replace('|', '／').replace('\n', ' ').replace('\r', ' ').trim();
+    }
+
+    // ---- 日志 ----
+
+    /** 「日志」页：列出每一条用户一言和添加时间；开关控制桌面是否只看这些句子。 */
+    private void bindLog() {
+        MaterialSwitch mode = findViewById(R.id.log_mode);
+        mode.setChecked(UserLog.enabled(prefs));
+        mode.setOnCheckedChangeListener((button, checked) -> {
+            prefs.edit().putBoolean(UserLog.KEY_MODE, checked).apply();
+            updateLogModeHint();
+            refreshLog();
+            sendBroadcast(new Intent(QuoteWidgetProvider.ACTION).setPackage(getPackageName()));
+            Toast.makeText(this, checked
+                            ? "日志模式已开启：小组件只显示你添加的一言"
+                            : "日志模式已关闭：恢复全部语料轮换",
+                    Toast.LENGTH_SHORT).show();
+        });
+        findViewById(R.id.log_add_quote).setOnClickListener(v -> {
+            BottomNavigationView nav = findViewById(R.id.bottom_nav);
+            nav.setSelectedItemId(R.id.nav_quotes);
+        });
+        updateLogModeHint();
+        refreshLog();
+    }
+
+    private void updateLogModeHint() {
+        TextView hint = findViewById(R.id.log_mode_hint);
+        if (hint == null) return;
+        hint.setText(UserLog.enabled(prefs)
+                ? "已开启：小组件只显示你添加的一言，作者行会带上添加日期和时间（精确到秒）。"
+                : "关闭时：小组件按原来的随机 / 顺序，在内置语料和你添加的一言之间轮换。");
+    }
+
+    /** 重新读取 custom_quotes 并按添加时间倒序铺卡片；一次只铺 100 条，避免大量导入时卡顿。 */
+    private void refreshLog() {
+        LinearLayout list = findViewById(R.id.log_list);
+        TextView empty = findViewById(R.id.log_empty);
+        TextView summary = findViewById(R.id.log_summary);
+        if (list == null || empty == null || summary == null) return;
+
+        List<Quote> log = UserLog.quotes(prefs);
+        summary.setText(log.isEmpty()
+                ? "共 0 句"
+                : "共 " + log.size() + " 句 · 最新的在最上面 · 日期时间精确到秒");
+        empty.setVisibility(log.isEmpty() ? View.VISIBLE : View.GONE);
+        list.removeAllViews();
+
+        int shown = Math.min(log.size(), logShownLimit);
+        for (int i = 0; i < shown; i++) {
+            list.addView(buildLogRow(log.get(i), i + 1));
+        }
+        if (log.size() > shown) {
+            MaterialButton more = new MaterialButton(this);
+            more.setText("显示更多（剩余 " + (log.size() - shown) + " 句）");
+            more.setOnClickListener(v -> {
+                logShownLimit += LOG_PAGE_SIZE;
+                refreshLog();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.topMargin = dp(8);
+            list.addView(more, lp);
+        }
+    }
+
+    private View buildLogRow(Quote quote, int number) {
+        MaterialCardView card = new MaterialCardView(this);
+        card.setRadius(dp(18));
+        card.setCardElevation(0f);
+        card.setCardBackgroundColor(getColor(R.color.md_surface_container_high));
+        card.setStrokeWidth(dp(1));
+        card.setStrokeColor(0x22000000);
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardLp.topMargin = dp(8);
+        card.setLayoutParams(cardLp);
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(14), dp(12), dp(14), dp(12));
+
+        TextView header = new TextView(this);
+        header.setText("第 " + number + " 句 · " + quote.category);
+        header.setTextSize(11);
+        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setTextColor(getColor(R.color.md_primary));
+        body.addView(header);
+
+        TextView text = new TextView(this);
+        text.setText(quote.text);
+        text.setTextSize(16);
+        text.setTextColor(getColor(R.color.md_on_surface));
+        text.setLineSpacing(dp(2), 1f);
+        LinearLayout.LayoutParams textLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        textLp.topMargin = dp(4);
+        body.addView(text, textLp);
+
+        String source = quote.source();
+        if (!source.isEmpty()) {
+            TextView sourceView = new TextView(this);
+            sourceView.setText(source);
+            sourceView.setTextSize(12);
+            sourceView.setTextColor(getColor(R.color.md_on_surface_variant));
+            LinearLayout.LayoutParams sourceLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            sourceLp.topMargin = dp(3);
+            body.addView(sourceView, sourceLp);
+        }
+
+        TextView time = new TextView(this);
+        time.setText(UserLog.timeLabel(quote.createdAt));
+        time.setTextSize(11);
+        time.setTextColor(quote.createdAt > 0
+                ? getColor(R.color.md_on_surface_variant)
+                : getColor(R.color.md_outline));
+        LinearLayout.LayoutParams timeLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        timeLp.topMargin = dp(6);
+        body.addView(time, timeLp);
+
+        card.addView(body);
+        card.setContentDescription("第 " + number + " 句：" + quote.text + "，"
+                + UserLog.timeLabel(quote.createdAt));
+        return card;
     }
 
     private void bindRefreshAll() {
@@ -905,9 +1047,12 @@ public class SettingsActivity extends ThemedActivity {
         nav.setSaveEnabled(false);
         nav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
-            int index = id == R.id.nav_theme ? 1 : id == R.id.nav_settings ? 2 : 0;
+            int index = id == R.id.nav_log ? 1
+                    : id == R.id.nav_theme ? 2
+                    : id == R.id.nav_settings ? 3 : 0;
             switchPanel(index);
-            if (index == 2) maybeAutoCheckUpdate();
+            if (index == 1) refreshLog();
+            if (index == 3) maybeAutoCheckUpdate();
             return true;
         });
     }
@@ -930,9 +1075,11 @@ public class SettingsActivity extends ThemedActivity {
             panel.setTranslationX(0f);
         }
         BottomNavigationView nav = findViewById(R.id.bottom_nav);
-        int itemId = index == 1 ? R.id.nav_theme : index == 2 ? R.id.nav_settings : R.id.nav_quotes;
+        int itemId = index == 1 ? R.id.nav_log
+                : index == 2 ? R.id.nav_theme
+                : index == 3 ? R.id.nav_settings : R.id.nav_quotes;
         nav.getMenu().findItem(itemId).setChecked(true);
-        if (index == 2) maybeAutoCheckUpdate();
+        if (index == 3) maybeAutoCheckUpdate();
     }
 
     /** 面板切换：新页面从滑动方向进入，旧页面反向退场，避免生硬地 GONE/VISIBLE 跳变。 */

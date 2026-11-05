@@ -415,7 +415,9 @@ public class ManageQuotesActivity extends ThemedActivity {
                     work.getText().toString().trim(),
                     "用户编辑",
                     newCategory.isEmpty() ? DEFAULT_CATEGORY : newCategory,
-                    editImagePath));
+                    editImagePath,
+                    // 保留原条目的添加时间；内置条目本来就是 0
+                    old.createdAt));
             editSaved = true;
             editDialog.dismiss();
             persist();

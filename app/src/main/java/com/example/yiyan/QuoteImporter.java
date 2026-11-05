@@ -72,7 +72,8 @@ final class QuoteImporter {
                         && (name.equals("quote") || name.equals("item"))) {
                     String t = safe(text);
                     if (!t.isEmpty() && merged.size() < MAX_ENTRIES) {
-                        Quote quote = new Quote(t, safe(author), safe(work), "用户添加", safe(category));
+                        Quote quote = new Quote(t, safe(author), safe(work), "用户添加",
+                                safe(category), "", System.currentTimeMillis());
                         if (keys.add(key(quote))) {
                             merged.add(quote.toLine());
                             result.imported++;

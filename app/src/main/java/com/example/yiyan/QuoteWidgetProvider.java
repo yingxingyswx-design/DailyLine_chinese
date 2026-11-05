@@ -150,26 +150,36 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
     private void update(Context context, AppWidgetManager manager, int widgetId) {
         SharedPreferences prefs = context.getSharedPreferences("settings", 0);
         sendGlassConfig(context, prefs);
+        boolean logMode = UserLog.enabled(prefs);
         List<Quote> candidates = candidates(context, prefs);
-        if (candidates.isEmpty()) return;
-        // 随机一言 / Hitokoto 全部使用 App 内置的 assets 语料，不再联网取词。
-        boolean random = prefs.getBoolean("randomMode", true);
-        int index = random
-                ? new Random().nextInt(candidates.size())
-                : (prefs.getInt("quoteIndex", -1) + 1) % candidates.size();
-        Quote quote = candidates.get(index);
+        boolean empty = candidates.isEmpty();
+        Quote quote;
+        int index = -1;
+        if (empty) {
+            // 日志模式只认用户自己添加的句子：一条都没有时给出空态，而不是偷偷换回内置语料
+            if (!logMode) return;
+            quote = new Quote("还没有添加一言\n到「一言」页写下第一句吧。",
+                    "", "", "日志模式", "用户");
+        } else {
+            // 随机一言 / Hitokoto 全部使用 App 内置的 assets 语料，不再联网取词。
+            boolean random = prefs.getBoolean("randomMode", true);
+            index = random
+                    ? new Random().nextInt(candidates.size())
+                    : (prefs.getInt("quoteIndex", -1) + 1) % candidates.size();
+            quote = candidates.get(index);
+        }
 
-        String meta = meta(quote);
+        String meta = empty ? "在「一言」页添加后会显示在这里" : meta(quote, logMode);
 
-        // lastQuote* 供自定义布局编辑器预览用
-        SharedPreferences.Editor editor = prefs.edit()
-                .putString("lastLog", "已切换：" + quote.text + "（" + System.currentTimeMillis() + "）")
-                .putString("lastQuoteText", quote.text)
-                .putString("lastQuoteMeta", meta)
-                .putString("lastQuoteImage", quote.imagePath);
-        if (index >= 0) editor.putInt("quoteIndex", index);
-        editor.apply();
-        if (index >= 0) {
+        if (!empty) {
+            // lastQuote* 供自定义布局编辑器预览用
+            SharedPreferences.Editor editor = prefs.edit()
+                    .putString("lastLog", "已切换：" + quote.text + "（" + System.currentTimeMillis() + "）")
+                    .putString("lastQuoteText", quote.text)
+                    .putString("lastQuoteMeta", meta)
+                    .putString("lastQuoteImage", quote.imagePath);
+            if (index >= 0) editor.putInt("quoteIndex", index);
+            editor.apply();
             Log.i(TAG, (prefs.getBoolean("randomMode", true) ? "随机" : "顺序")
                     + "切换到第" + index + "条：" + quote.text);
         }
@@ -200,7 +210,7 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
         views.setTextViewText(R.id.quote_text, quote.text);
         // 2×2 上完整元信息（作者 · 作品 · 类型 · 分类）一行放不下，只保留作者与作品，
         // 避免出现 “— 刘慈欣 · 《三体I：地球往事》 · Hito…” 这种被截断的尾巴。
-        views.setTextViewText(R.id.quote_meta, compact ? metaCompact(quote) : meta);
+        views.setTextViewText(R.id.quote_meta, compact ? metaCompact(quote, logMode) : meta);
         views.setTextViewTextSize(R.id.quote_text, TypedValue.COMPLEX_UNIT_SP, fontSp);
         views.setViewVisibility(R.id.quote_meta, showMeta ? View.VISIBLE : View.GONE);
         views.setViewVisibility(R.id.next_hint, showHint ? View.VISIBLE : View.GONE);
@@ -678,6 +688,13 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
      * 作者/出处为空的自定义条目同样有效，只有句子必填。
      */
     private List<Quote> candidates(Context context, SharedPreferences prefs) {
+        // 日志模式：只给用户自己添加的一言，内置语料 / Hitokoto / 分类过滤都不参与
+        if (UserLog.enabled(prefs)) {
+            List<Quote> userQuotes = UserLog.quotes(prefs);
+            Log.i(TAG, "日志模式候选 " + userQuotes.size() + " 条（仅用户一言）");
+            return userQuotes;
+        }
+
         List<Quote> list = new ArrayList<>();
         Set<String> disabled = prefs.getStringSet("disabledCategories", new HashSet<String>());
 
@@ -693,7 +710,7 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
             }
         }
 
-        for (String line : prefs.getStringSet("custom_quotes", new HashSet<String>())) {
+        for (String line : UserLog.lines(prefs)) {
             Quote quote = Quote.parse(line, "用户添加", "用户");
             if (quote != null) list.add(quote);
         }
@@ -720,8 +737,11 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
         return filtered;
     }
 
-    /** 2×2 用的一行元信息：只留作者与作品，两者都没有时才退到类型/分类。 */
-    private String metaCompact(Quote quote) {
+    /**
+     * 2×2 用的一行元信息：普通模式只留作者与作品，两者都没有时才退到类型/分类；
+     * 日志模式优先显示添加日期时间，宽度不够时至少让秒级时间完整可见。
+     */
+    private String metaCompact(Quote quote, boolean logMode) {
         String author = zhAuthor(quote.author);
         String work = zhWork(quote.work);
         StringBuilder line = new StringBuilder();
@@ -731,12 +751,16 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
             else line.append("— ");
             line.append("《").append(work).append("》");
         }
+        if (logMode) {
+            String time = UserLog.dateTime(quote.createdAt);
+            return time.isEmpty() ? UserLog.timeLabel(quote.createdAt) : time;
+        }
         if (line.length() == 0) return quote.kind + " · " + quote.category;
         return line.toString();
     }
 
     /** 元信息行：作者与出处在缺失时整段省略，不会出现 “—  · 《》”。 */
-    private String meta(Quote quote) {
+    private String meta(Quote quote, boolean logMode) {
         StringBuilder head = new StringBuilder();
         String author = zhAuthor(quote.author);
         String work = zhWork(quote.work);
@@ -747,6 +771,10 @@ public class QuoteWidgetProvider extends AppWidgetProvider {
         }
         StringBuilder meta = new StringBuilder();
         if (head.length() > 0) meta.append("— ").append(head).append(" · ");
+        if (logMode) {
+            // 日志模式：在完整元信息末尾补上「YYYY-MM-DD HH:mm:ss 添加」
+            return meta.append(UserLog.widgetTimeLabel(quote.createdAt)).toString();
+        }
         return meta.append(quote.kind).append(" · ").append(quote.category).toString();
     }
 
