@@ -125,7 +125,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="4 · 导入 XML 语料"
+                        android:text="4 · 导入 / 导出 XML 语料"
                         android:textAppearance="@style/TextAppearance.Yiyan.Section" />
 
                     <TextView
@@ -151,6 +151,13 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="10dp"
                         android:text="也可以只给句子：&lt;quote text=&quot;只有一句话&quot;/&gt;。导入后出现在「用户添加」里，可在管理页继续编辑。"
+                        android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:text="「设置」页同一张卡片里点「导出我的一言（保存为 XML）」，会把「日志」里的用户一言写成同样的格式（附带添加时间），可以随时重新导入。"
                         android:textAppearance="?attr/textAppearanceBodyMedium" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>

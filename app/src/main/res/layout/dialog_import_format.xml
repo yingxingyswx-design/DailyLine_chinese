@@ -21,7 +21,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="根节点名字随意；条目用 &lt;quote&gt; 或 &lt;item&gt;。\n只有 text（句子）必填，author / work / category 都可省略。\n可以用属性，也可以用同名子标签；重复条目会自动跳过。"
+            android:text="根节点名字随意；条目用 &lt;quote&gt; 或 &lt;item&gt;。\n只有 text（句子）必填，author / work / category 都可省略。\n可以用属性，也可以用同名子标签；重复条目会自动跳过。\n可选的 created（毫秒时间戳）用于保留添加时间。"
             android:textAppearance="?attr/textAppearanceBodyMedium" />
 
         <TextView
@@ -56,6 +56,14 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:text="导入后条目会进入「用户添加」，可以在「一言管理」里继续改作者、出处和配图。"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="「导出我的一言」生成的文件也是这个格式，可以直接再次导入。"
             android:textAppearance="?attr/textAppearanceBodySmall"
             android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>

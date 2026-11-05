@@ -15,9 +15,10 @@ import java.util.Set;
  * 从 XML 导入一言。
  *
  * 支持两种写法（可混用，子标签优先于属性）：
- * {@code <quote text="…" author="…" work="…" category="…"/>}
+ * {@code <quote text="…" author="…" work="…" category="…" created="…"/>}
  * {@code <quote><text>…</text><author>…</author><work>…</work><category>…</category></quote>}
  * 根节点任意（习惯用 quotes）。只有 text 必填，导入进「用户添加」，重复条目自动跳过。
+ * {@code created} 是 {@link QuoteExporter} 写出的添加时间（epoch 毫秒），没有或无效时按导入时间记。
  */
 final class QuoteImporter {
 
@@ -46,7 +47,7 @@ final class QuoteImporter {
         }
 
         Set<String> merged = new HashSet<>(custom);
-        String text = null, author = null, work = null, category = null;
+        String text = null, author = null, work = null, category = null, created = null;
 
         try {
             XmlPullParser parser = Xml.newPullParser();
@@ -60,20 +61,23 @@ final class QuoteImporter {
                         author = parser.getAttributeValue(null, "author");
                         work = parser.getAttributeValue(null, "work");
                         category = parser.getAttributeValue(null, "category");
+                        created = parser.getAttributeValue(null, "created");
                     } else if (name.equals("text") || name.equals("author")
-                            || name.equals("work") || name.equals("category")) {
+                            || name.equals("work") || name.equals("category")
+                            || name.equals("created")) {
                         String value = parser.nextText().trim();
                         if (name.equals("text")) text = value;
                         else if (name.equals("author")) author = value;
                         else if (name.equals("work")) work = value;
-                        else category = value;
+                        else if (name.equals("category")) category = value;
+                        else created = value;
                     }
                 } else if (event == XmlPullParser.END_TAG
                         && (name.equals("quote") || name.equals("item"))) {
                     String t = safe(text);
                     if (!t.isEmpty() && merged.size() < MAX_ENTRIES) {
                         Quote quote = new Quote(t, safe(author), safe(work), "用户添加",
-                                safe(category), "", System.currentTimeMillis());
+                                safe(category), "", createdAt(created));
                         if (keys.add(key(quote))) {
                             merged.add(quote.toLine());
                             result.imported++;
@@ -83,7 +87,7 @@ final class QuoteImporter {
                     } else {
                         result.skipped++;
                     }
-                    text = author = work = category = null;
+                    text = author = work = category = created = null;
                 }
                 event = parser.next();
             }
@@ -108,5 +112,21 @@ final class QuoteImporter {
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    /**
+     * 添加时间：导出文件里是 epoch 毫秒；兼容只写到秒的旧工具（小于 1e11 按秒处理）。
+     * 缺失或无法解析时退回导入时刻。
+     */
+    private static long createdAt(String value) {
+        String text = safe(value);
+        if (text.isEmpty()) return System.currentTimeMillis();
+        try {
+            long time = Long.parseLong(text);
+            if (time <= 0) return System.currentTimeMillis();
+            return time < 100_000_000_000L ? time * 1000L : time;
+        } catch (NumberFormatException e) {
+            return System.currentTimeMillis();
+        }
     }
 }

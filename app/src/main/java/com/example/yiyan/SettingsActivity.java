@@ -31,15 +31,20 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.slider.Slider;
 
+import java.io.OutputStream;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class SettingsActivity extends ThemedActivity {
 
     private static final int REQUEST_IMPORT_XML = 4401;
     private static final int REQUEST_PICK_BACKGROUND = 4402;
+    private static final int REQUEST_EXPORT_XML = 4403;
     private static final String KEY_UPDATE_CHANNEL = "updateChannel";
 
 
@@ -95,6 +100,7 @@ public class SettingsActivity extends ThemedActivity {
         bindLog();
         bindCustomLayout();
         bindImport();
+        bindExport();
         bindUpdate();
         bindRefreshAll();
         bindBottomNav();
@@ -1154,11 +1160,61 @@ public class SettingsActivity extends ThemedActivity {
                 .show();
     }
 
+    // ---- 导出 XML ----
+
+    private void bindExport() {
+        findViewById(R.id.export_xml).setOnClickListener(v -> startExport());
+    }
+
+    private void startExport() {
+        if (UserLog.quotes(prefs).isEmpty()) {
+            Toast.makeText(this, "日志里还没有一言，先添加几句再导出", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String name = "99yiyan-"
+                + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
+                + ".xml";
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/xml");
+        intent.putExtra(Intent.EXTRA_TITLE, name);
+        try {
+            startActivityForResult(intent, REQUEST_EXPORT_XML);
+        } catch (Exception e) {
+            Toast.makeText(this, "没有可用的文件保存器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void exportTo(android.net.Uri uri) {
+        TextView status = findViewById(R.id.export_status);
+        List<Quote> quotes = UserLog.quotes(prefs);
+        try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+            if (out == null) throw new java.io.IOException("无法打开文件");
+            QuoteExporter.Result result = QuoteExporter.exportXml(out, quotes);
+            String text;
+            if (result.error != null) {
+                text = "导出失败：" + result.error;
+            } else {
+                text = "已导出 " + result.exported + " 条，格式与导入一致，可再次导入";
+            }
+            if (status != null) status.setText(text);
+            Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            String text = "导出失败：" + e.getMessage();
+            if (status != null) status.setText(text);
+            Toast.makeText(this, text, Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_IMPORT_XML || resultCode != RESULT_OK || data == null) return;
-        if (data.getData() == null) return;
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        if (requestCode == REQUEST_EXPORT_XML) {
+            exportTo(data.getData());
+            return;
+        }
+        if (requestCode != REQUEST_IMPORT_XML) return;
         TextView status = findViewById(R.id.import_status);
         try (java.io.InputStream in = getContentResolver().openInputStream(data.getData())) {
             if (in == null) throw new java.io.IOException("无法打开文件");
